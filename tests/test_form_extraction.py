@@ -91,7 +91,10 @@ def test_docling_parse_exposes_complete_widget_contract_in_native_order() -> Non
         backend=DoclingParseDocumentBackend,
     )
     backend = input_doc._backend
-    page = backend.load_page(0)
+    # `DoclingParseDocumentBackend` is a deprecated wrapper around the threaded
+    # backend since #4244, and the threaded backend streams pages rather than
+    # supporting random access, so take the first page off the iterator.
+    page = next(iter(backend.iter_pages()))
     try:
         segmented_page = page.get_segmented_page()
         assert segmented_page is not None
