@@ -30,6 +30,7 @@ from docling.models.stages.ocr.nemotron_ocr_model import (
 )
 from docling.models.stages.ocr.rapid_ocr_model import (
     _RAPIDOCR_DEFAULT_LANGUAGE,
+    _RAPIDOCR_MODEL_TYPE,
     RapidOcrModel,
     _parse_rapidocr_model_spec,
 )
@@ -72,6 +73,7 @@ def download_models(
     with_granite_chart_extraction_v4: bool = False,
     with_rapidocr: bool = True,
     rapidocr_models: Optional[list[str]] = None,
+    rapidocr_model_size: str = _RAPIDOCR_MODEL_TYPE,
     with_easyocr: bool = False,
     easyocr_languages: Optional[list[str]] = None,  # BCP-47 tags
     with_nemotron_ocr: bool = False,
@@ -218,26 +220,27 @@ def download_models(
         )
 
     if with_granite_chart_extraction:
-        from docling.models.stages.chart_extraction.granite_vision import (
-            ChartExtractionModelGraniteVision,
-        )
-
-        _log.info("Downloading Granite Vision Charts Extraction model...")
-        ChartExtractionModelGraniteVision.download_models(
-            local_dir=output_dir / ChartExtractionModelGraniteVision._model_repo_folder,
-            force=force,
-            progress=progress,
+        _log.warning(
+            "with_granite_chart_extraction=True: the Granite Vision V1 chart extraction "
+            "model (granite-vision-3.3-2b-chart2csv-preview) is no longer supported. "
+            "Use with_granite_chart_extraction_v4=True instead."
         )
 
     if with_granite_chart_extraction_v4:
-        from docling.models.stages.chart_extraction.granite_vision import (
-            ChartExtractionModelGraniteVisionV4,
+        from docling.datamodel.chart_extraction_options import (
+            ChartExtractionVlmEngineOptions,
         )
 
-        _log.info("Downloading Granite Vision 4.1 Charts Extraction model...")
-        ChartExtractionModelGraniteVisionV4.download_models(
-            local_dir=output_dir
-            / ChartExtractionModelGraniteVisionV4._model_repo_folder,
+        preset = ChartExtractionVlmEngineOptions.get_preset("granite_vision_v4")
+        repo_id = preset.model_spec.get_repo_id(preset.default_engine_type)
+        revision = preset.model_spec.get_revision(preset.default_engine_type)
+        _log.info(
+            f"Downloading Granite Vision 4.1 Charts Extraction model ({repo_id})..."
+        )
+        download_hf_model(
+            repo_id=repo_id,
+            revision=revision,
+            local_dir=output_dir / repo_id.replace("/", "--"),
             force=force,
             progress=progress,
         )
@@ -260,6 +263,7 @@ def download_models(
                 local_dir=output_dir / RapidOcrModel._model_repo_folder,
                 force=force,
                 progress=progress,
+                model_size=rapidocr_model_size,
             )
 
     if with_easyocr:

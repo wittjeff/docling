@@ -130,6 +130,39 @@ This is a second paragraph.
     assert [item.label for item in text_items[1:]] == [DocItemLabel.TEXT] * 5
 
 
+def test_email_backend_keeps_cc_recipients():
+    """Cc recipients are part of who the message was addressed to."""
+    raw_email = b"""From: Alice Example <alice@example.com>
+To: Bob Example <bob@example.com>
+Cc: Carol Example <carol@example.com>, dave@example.com
+Subject: Copied Email
+Date: Tue, 20 May 2026 10:30:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Hello all.
+"""
+    in_doc = InputDocument(
+        path_or_stream=BytesIO(raw_email),
+        format=InputFormat.EMAIL,
+        filename="copied.eml",
+        backend=EmailDocumentBackend,
+    )
+    backend = EmailDocumentBackend(in_doc=in_doc, path_or_stream=BytesIO(raw_email))
+
+    doc = backend.convert()
+    text_items = [item for item in doc.texts if isinstance(item, TextItem)]
+
+    assert [item.text for item in text_items] == [
+        "Copied Email",
+        "From: Alice Example <alice@example.com>",
+        "To: Bob Example <bob@example.com>",
+        "Cc: Carol Example <carol@example.com>, dave@example.com",
+        "Date: 2026-05-20T10:30:00+00:00",
+        "Hello all.",
+    ]
+
+
 def test_email_backend_quotes_display_names_holding_specials():
     """A name holding specials is quoted so the list parses back as itself."""
     raw_email = b"""From: "Doe, John" <john@example.com>
@@ -410,6 +443,40 @@ Content-Type: text/html; charset="utf-8"
     assert "<strong>" not in markdown
 
 
+def test_email_backend_normalises_body_line_endings():
+    """A CRLF or lone-CR body leaves no carriage return inside a paragraph."""
+    for terminator in ("\r\n", "\r"):
+        body = (
+            f"First paragraph line one.{terminator}First paragraph line two."
+            f"{terminator}{terminator}Second paragraph.{terminator}"
+        )
+        raw_email = (
+            "From: alice@example.com\r\n"
+            "Subject: Line Endings\r\n"
+            "MIME-Version: 1.0\r\n"
+            'Content-Type: text/plain; charset="utf-8"\r\n'
+            "\r\n" + body
+        ).encode()
+        in_doc = InputDocument(
+            path_or_stream=BytesIO(raw_email),
+            format=InputFormat.EMAIL,
+            filename="line_endings.eml",
+            backend=EmailDocumentBackend,
+        )
+        backend = EmailDocumentBackend(in_doc=in_doc, path_or_stream=BytesIO(raw_email))
+
+        text_items = [
+            item for item in backend.convert().texts if isinstance(item, TextItem)
+        ]
+
+        assert [item.text for item in text_items] == [
+            "Line Endings",
+            "From: alice@example.com",
+            "First paragraph line one.\nFirst paragraph line two.",
+            "Second paragraph.",
+        ]
+
+
 def test_convert_msg_backend_from_path():
     in_path = Path("tests/data/email/sources/msg_simple.msg")
     in_doc = InputDocument(
@@ -541,3 +608,40 @@ def test_msg_document_converter_lists_attachments_via_format_option():
     assert "Attachments" in markdown
     assert "test.txt" in markdown
     assert "report.pdf" in markdown
+
+
+def test_email_falls_back_to_html_when_the_plain_part_is_blank():
+    """A part being present is not the same as a part holding text.
+
+    A multipart/alternative message can carry a whitespace-only text/plain
+    part beside a real text/html one, which many senders generate
+    automatically. Returning the empty result from the plain branch drops the
+    whole body.
+    """
+    from docling.datamodel.document import DocumentStream
+
+    raw = (
+        b"From: Alice <alice@example.com>\r\n"
+        b"To: Bob <bob@example.com>\r\n"
+        b"Subject: Blank Plain Part\r\n"
+        b'Content-Type: multipart/alternative; boundary="B"\r\n'
+        b"\r\n"
+        b"--B\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n"
+        b"\r\n"
+        # a single space: present, truthy, and holding no paragraph
+        b" \r\n"
+        b"--B\r\n"
+        b"Content-Type: text/html; charset=utf-8\r\n"
+        b"\r\n"
+        b"<html><body><p>Real content that should appear.</p></body></html>\r\n"
+        b"--B--\r\n"
+    )
+
+    converter = DocumentConverter(allowed_formats=[InputFormat.EMAIL])
+    doc = converter.convert(
+        DocumentStream(name="blank_plain.eml", stream=BytesIO(raw)),
+        raises_on_error=True,
+    ).document
+
+    assert "Real content that should appear." in doc.export_to_markdown()

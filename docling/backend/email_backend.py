@@ -152,7 +152,7 @@ class EmailDocumentBackend(DeclarativeDocumentBackend):
             email_message["From"] = EmailDocumentBackend._header_safe(message.sender)
 
         # Preserve the To/Cc/Bcc split from the recipient rows so downstream
-        # rendering (which shows only "To") matches the .eml behavior.
+        # rendering (which shows "To" and "Cc") matches the .eml behavior.
         grouped: dict[str, list[str]] = {}
         for recipient in message.recipients:
             formatted = formataddr(
@@ -240,6 +240,8 @@ class EmailDocumentBackend(DeclarativeDocumentBackend):
         return ", ".join(formatted)
 
     def _split_paragraphs(self, text: str) -> list[str]:
+        """Split a body into paragraphs, normalising CRLF and lone CR first."""
+        text = re.sub(r"\r\n|\r", "\n", text)
         return [
             paragraph.strip()
             for paragraph in re.split(r"\n\s*\n+", text.strip())
@@ -265,18 +267,26 @@ class EmailDocumentBackend(DeclarativeDocumentBackend):
     def _get_body_paragraphs(self) -> list[str]:
         assert self.mail is not None
 
+        # A part being present does not mean it holds a paragraph. A
+        # multipart/alternative message can carry a blank or whitespace-only
+        # text/plain part beside a real text/html one, which many senders
+        # generate automatically. Only return once a part has actually
+        # produced text, or the fallbacks below never run and the message
+        # renders with no body at all.
         if self.mail.text_plain:
             paragraphs: list[str] = []
             for part in self.mail.text_plain:
                 paragraphs.extend(self._split_paragraphs(part))
-            return paragraphs
+            if paragraphs:
+                return paragraphs
 
         if self.mail.text_html:
             paragraphs = []
             for part in self.mail.text_html:
                 html_doc = self._convert_html_part(part)
                 paragraphs.extend(self._split_paragraphs(html_doc.export_to_markdown()))
-            return paragraphs
+            if paragraphs:
+                return paragraphs
 
         return self._split_paragraphs(self.mail.body)
 
@@ -330,6 +340,7 @@ class EmailDocumentBackend(DeclarativeDocumentBackend):
         )
         from_text = self._format_addresses(self.mail.from_, fallback="")
         to_text = self._format_addresses(self.mail.to, fallback="")
+        cc_text = self._format_addresses(self.mail.cc, fallback="")
         date_text = self._get_date_text()
         body_paragraphs = self._get_body_paragraphs()
 
@@ -339,6 +350,8 @@ class EmailDocumentBackend(DeclarativeDocumentBackend):
             doc.add_text(label=DocItemLabel.TEXT, text=f"From: {from_text}")
         if to_text:
             doc.add_text(label=DocItemLabel.TEXT, text=f"To: {to_text}")
+        if cc_text:
+            doc.add_text(label=DocItemLabel.TEXT, text=f"Cc: {cc_text}")
         if date_text:
             doc.add_text(label=DocItemLabel.TEXT, text=f"Date: {date_text}")
         for body_paragraph in body_paragraphs:
